@@ -1,0 +1,7 @@
+*.mp3
+*.cdg
+*.o
+/cdg
+/.idea
+*.tar
+
