@@ -15,6 +15,8 @@
 #define CDG_INSN_LOAD_COLOR_TABLE_08 31
 #define CDG_INSN_TILE_BLOCK_XOR      38
 
+#define ARRAY_INDEX(X, Y) (((Y) * 300) + (X))
+
 #pragma pack(push, 1)
 struct subchannel_packet {
     uint8_t command;
@@ -62,5 +64,32 @@ struct cdg_insn_load_color_table {
     uint16_t spec[8];    // AND with 0x3F3F to clear P and Q channel
 };
 #pragma pack(pop)
+
+// return: 0 -> eof, 1 -> read an instruction, 2 -> read an empty subchannel packet
+typedef int (*cdg_reader_read_callback)(void *userData, struct subchannel_packet *outPkt);
+
+struct cdg_snapshot {
+    uint32_t timestamp;      // subchannel packet count
+    uint8_t color_table[16];
+    uint8_t clear_color;
+};
+
+struct cdg_state {
+    uint32_t subchannel_packet_count;
+    uint16_t color_table[16];
+    uint8_t framebuffer[300 * 216];
+};
+
+struct cdg_reader {
+    int eof;
+    struct cdg_state state;
+    void *userData;
+    // called when the cdg reader needs to read a CDG instruction
+    cdg_reader_read_callback read_callback;
+};
+
+inline uint32_t cdg_state_get_time_elapsed(struct cdg_state *state);
+int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pkt);
+int cdg_reader_advance_to(struct cdg_reader *reader, uint32_t timestamp);
 
 #endif // _CDG_H_INCLUDED
