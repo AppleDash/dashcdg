@@ -83,6 +83,20 @@ void process_cdg_insn(struct subchannel_packet *pkt) {
     }
 }
 
+static inline int cdg_color_to_rgb(uint16_t color) {
+    /*
+     * Each colorSpec value can be converted to RGB using the following diagram:
+     * [---high byte---]   [---low byte----]
+     *  7 6 5 4 3 2 1 0     7 6 5 4 3 2 1 0
+     *  X X r r r r g g     X X g g b b b b
+     */
+    int r = ((color & 0x3C00) >> 10) * 16;
+    int g = (((color & 0x300) >> 6) | ((color & 0x30) >> 4)) * 16;
+    int b = (color & 0xF) * 16;
+
+    return (r << 16) | (g << 8) | b;
+}
+
 // Returns an integer representing the number of milliseconds elapsed since the start of the CDG stream.
 inline uint32_t cdg_state_get_time_elapsed(struct cdg_state *state) {
     // 300 packets per second
@@ -112,7 +126,7 @@ int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pk
             struct cdg_insn_load_color_table *insn_load_color_table = (struct cdg_insn_load_color_table *) insn;
 
             for (int i = 0; i < 8; i++) {
-                state->color_table[i] = ntohs(insn_load_color_table->spec[i] & 0x3F3F);
+                state->color_table[i] = cdg_color_to_rgb(ntohs(insn_load_color_table->spec[i] & 0x3F3F));
             }
 
             return 1;
@@ -124,7 +138,7 @@ int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pk
             struct cdg_insn_load_color_table *insn_load_color_table = (struct cdg_insn_load_color_table *) insn;
 
             for (int i = 0; i < 8; i++) {
-                state->color_table[i + 8] = ntohs(insn_load_color_table->spec[i] & 0x3F3F);
+                state->color_table[i + 8] = cdg_color_to_rgb(ntohs(insn_load_color_table->spec[i] & 0x3F3F));
             }
 
             return 1;
@@ -139,7 +153,7 @@ int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pk
             // This is to ensure the screen is cleared in a potentially unreliable stream.
             // Since we're reading from a file, we can just check if the repeat code is 0 and only do this once.
             if (insn_memory_preset->repeat == 0) {
-                memset(state->framebuffer, insn_memory_preset->color, 300 * 216);
+                memset(state->framebuffer, insn_memory_preset->color, (300 * 216) * sizeof(unsigned int));
             }
 
             return 1;

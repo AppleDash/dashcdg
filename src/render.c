@@ -6,9 +6,14 @@
 #include "cdg.h"
 #include "audio.h"
 
+struct {
+    GLuint id;
+    GLint colorTableLocation;
+    GLint framebufferLocation;
+} g_Shader;
+
 static const char *g_Mp3Path;
 static GLuint g_TextureId = 0;
-static uint8_t g_TexBuffer[300 * 216 * 3];
 static uint32_t g_StartTimestamp = 0;
 static struct cdg_reader g_Reader;
 static struct audio_state g_AudioState;
@@ -21,37 +26,49 @@ static int read_chunk_from_file(void *userData, struct subchannel_packet *outPkt
            && (fread(outPkt, 1, sizeof(struct subchannel_packet), fp) == sizeof(struct subchannel_packet));
 }
 
-static void cdg_state_fb_to_8_bit_color(struct cdg_state *state, uint8_t out[300 * 216 * 3]) {
-    /*
-     * Each colorSpec value can be converted to RGB using the following diagram:
-     * [---high byte---]   [---low byte----]
-     *  7 6 5 4 3 2 1 0     7 6 5 4 3 2 1 0
-     *  X X r r r r g g     X X g g b b b b
-     */
-    size_t idx;
+static void checkGlError(const char *where) {
+    GLenum error;
+    const char *errorString;
 
-    for (int y = 0; y < 216; y++) {
-        for (int x = 0; x < 300; x++) {
-            idx = ARRAY_INDEX(x, y);
-            uint16_t color = state->color_table[state->framebuffer[idx]];
-            uint8_t r = (color & 0x3C00) >> 10;
-            uint8_t g = ((color & 0x300) >> 6) | ((color & 0x30) >> 4);
-            uint8_t b = (color & 0xF);
-
-            out[(idx * 3) + 0] = r * 16;
-            out[(idx * 3) + 1] = g * 16;
-            out[(idx * 3) + 2] = b * 16;
+    /* Check errors from the last frame rendered */
+    while ((error = glGetError()) != GL_NO_ERROR) {
+        switch (error) {
+            case GL_INVALID_ENUM:
+                errorString = "invalid enum";
+                break;
+            case GL_INVALID_VALUE:
+                errorString = "invalid value";
+                break;
+            case GL_INVALID_OPERATION:
+                errorString = "invalid operation";
+                break;
+            case GL_STACK_OVERFLOW:
+                errorString = "stack overflow";
+                break;
+            case GL_STACK_UNDERFLOW:
+                errorString = "stack underflow";
+                break;
+            case GL_OUT_OF_MEMORY:
+                errorString = "out of memory";
+                break;
+            case GL_INVALID_FRAMEBUFFER_OPERATION:
+                errorString = "invalid framebuffer operation";
+                break;
+            default:
+                errorString = "unknown";
+                break;
         }
+        fprintf(stderr, "GL ERROR at %s: %d (%s)\n", where, error, errorString);
     }
 }
 
 void display(void) {
     uint32_t ms;
 
-    glClearColor(0, 0, 0, 0);
+    glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glActiveTexture(GL_TEXTURE0);
     glEnable(GL_TEXTURE_2D);
     glBindTexture(GL_TEXTURE_2D, g_TextureId);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
@@ -59,21 +76,25 @@ void display(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 
+    glUseProgram(g_Shader.id);
+
     if (g_StartTimestamp == 0) {
         g_StartTimestamp = ATOMIC_INT_GET(g_AudioState.timestamp);
     } else {
         ms = ATOMIC_INT_GET(g_AudioState.timestamp) - g_StartTimestamp;
         if (cdg_reader_advance_to(&g_Reader, ms)) {
-            cdg_state_fb_to_8_bit_color(&g_Reader.state, g_TexBuffer);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 300, 216, 0, GL_RGB, GL_UNSIGNED_BYTE, g_TexBuffer);
+            glUniform1i(g_Shader.framebufferLocation, 0);
+            glUniform1iv(g_Shader.colorTableLocation, 16, g_Reader.state.color_table);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 300, 216, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_Reader.state.framebuffer);
+
         }
     }
 
     glBegin(GL_QUADS);
-    glTexCoord2f(0, 0); glVertex2f(0, 0);
-    glTexCoord2f(1, 0); glVertex2f(300, 0);
-    glTexCoord2f(1, 1); glVertex2f(300, 216);
-    glTexCoord2f(0, 1); glVertex2f(0, 216);
+        glTexCoord2f(0, 0); glVertex2f(0, 0);
+        glTexCoord2f(1, 0); glVertex2f(300, 0);
+        glTexCoord2f(1, 1); glVertex2f(300, 216);
+        glTexCoord2f(0, 1); glVertex2f(0, 216);
     glEnd();
 
     glFlush();
@@ -132,6 +153,21 @@ int main(int argc, char *argv[]) {
 
     glewExperimental = GL_TRUE;
     glewInit();
+
+    if ((g_Shader.id = load_shader_program("cdg")) == 0) {
+        fprintf(stderr, "failed to load shader program\n");
+        return 1;
+    }
+
+    if ((g_Shader.colorTableLocation = glGetUniformLocation(g_Shader.id, "cdgColorMap")) == -1) {
+        fprintf(stderr, "failed to get color table uniform location\n");
+        return 1;
+    }
+
+    if ((g_Shader.framebufferLocation = glGetUniformLocation(g_Shader.id, "cdgFramebuffer")) == -1) {
+        fprintf(stderr, "failed to get framebuffer uniform location\n");
+        return 1;
+    }
 
     glutDisplayFunc(display);
     glutReshapeFunc(resizeCallback);

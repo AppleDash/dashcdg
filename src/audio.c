@@ -1,6 +1,7 @@
 #include "audio.h"
 
 #include <stdio.h>
+#include <unistd.h>
 #include <pthread.h>
 #include <soundio/soundio.h>
 
@@ -59,6 +60,25 @@ void high_low_buffer_consume(struct high_low_buffer *hlb, size_t size, uint16_t 
     memmove(hlb->buffer, hlb->buffer + size, hlb->size * sizeof(uint16_t));
 }
 
+static int stdoutCopy;
+static int stderrCopy;
+
+static void backup_and_close_stdout_stderr(void) {
+    stdoutCopy = dup(STDOUT_FILENO);
+    stderrCopy = dup(STDERR_FILENO);
+
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+}
+
+static void restore_stdout_stderr(void) {
+    dup2(stdoutCopy, STDOUT_FILENO);
+    dup2(stderrCopy, STDERR_FILENO);
+
+    close(stdoutCopy);
+    close(stderrCopy);
+}
+
 static int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long frameCount,
                       const PaStreamCallbackTimeInfo *timeInfo, PaStreamCallbackFlags statusFlags,
                       void *userData);
@@ -67,10 +87,15 @@ static int create_pa_stream(struct audio_state *state) {
     PaStream *stream;
     PaError err;
 
+    // This business is just to stop PortAudio from spamming the console
+    backup_and_close_stdout_stderr();
     if ((err = Pa_Initialize()) != paNoError) {
+        restore_stdout_stderr();
         fprintf(stderr, "PortAudio error: %s\n", Pa_GetErrorText(err));
         return 0;
     }
+
+    restore_stdout_stderr();
 
     if ((err = Pa_OpenDefaultStream(&stream, 0, state->headerInfo.channels, paInt16, state->headerInfo.hz, paFramesPerBufferUnspecified, paCallback, state)) != paNoError) {
         fprintf(stderr, "PortAudio error: %s\n", Pa_GetErrorText(err));
@@ -131,7 +156,7 @@ static void decode_first_frame(struct audio_state *state) {
 int start_mp3_playback(const char *path, struct audio_state *state) {
     memset(state, 0, sizeof(struct audio_state));
 
-    if (!read_file(path, &state->buffer, &state->buffer_size)) {
+    if (!read_file(path, (char **) &state->buffer, &state->buffer_size)) {
         fprintf(stderr, "failed to read file\n");
         return 0;
     }

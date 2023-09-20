@@ -76,8 +76,8 @@ struct cdg_snapshot {
 
 struct cdg_state {
     uint32_t subchannel_packet_count;
-    uint16_t color_table[16];
-    uint8_t framebuffer[300 * 216];
+    int color_table[16];
+    unsigned int framebuffer[300 * 216];
 };
 
 struct cdg_reader {
@@ -88,7 +88,7 @@ struct cdg_reader {
     cdg_reader_read_callback read_callback;
 };
 
-inline uint32_t cdg_state_get_time_elapsed(struct cdg_state *state);
+uint32_t cdg_state_get_time_elapsed(struct cdg_state *state);
 int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pkt);
 int cdg_reader_advance_to(struct cdg_reader *reader, uint32_t timestamp);
 
