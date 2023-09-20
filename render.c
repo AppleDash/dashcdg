@@ -7,6 +7,7 @@
 #include <netinet/in.h>
 
 #include "cdg.h"
+#include "audio.h"
 
 #define ARRAY_INDEX(X, Y) (((Y) * 300) + (X))
 
@@ -40,6 +41,7 @@ static GLuint g_TextureId = 0;
 static uint8_t g_TexBuffer[300 * 216 * 3];
 static unsigned long g_Start = 0;
 static struct cdg_reader g_Reader;
+static struct audio_state g_AudioState;
 
 // Returns an integer representing the number of milliseconds elapsed since the start of the CDG stream.
 inline uint32_t cdg_state_get_time_elapsed(struct cdg_state *state) {
@@ -203,16 +205,25 @@ int cdg_reader_advance_to(struct cdg_reader *reader, uint32_t timestamp) {
 
 
 void cdg_state_fb_to_8_bit_color(struct cdg_state *state, uint8_t out[300 * 216 * 3]) {
+    /*
+     * Each colorSpec value can be converted to RGB using the following diagram:
+     * [---high byte---]   [---low byte----]
+     *  7 6 5 4 3 2 1 0     7 6 5 4 3 2 1 0
+     *  X X r r r r g g     X X g g b b b b
+     */
+    size_t idx;
+
     for (int y = 0; y < 216; y++) {
         for (int x = 0; x < 300; x++) {
-            uint16_t color = state->color_table[state->framebuffer[ARRAY_INDEX(x, y)]];
-            uint8_t r = (color & 0b0011110000000000) >> 10;
-            uint8_t g = ((color & 0b1100000000) >> 6) | ((color & 0b110000) >> 4);
-            uint8_t b = (color & 0b1111);
+            idx = ARRAY_INDEX(x, y);
+            uint16_t color = state->color_table[state->framebuffer[idx]];
+            uint8_t r = (color & 0x3C00) >> 10;
+            uint8_t g = ((color & 0x300) >> 6) | ((color & 0x30) >> 4);
+            uint8_t b = (color & 0xF);
 
-            out[((y * 300) + x) * 3] = (r * 16);
-            out[(((y * 300) + x) * 3) + 1] = g * 16;
-            out[(((y * 300) + x) * 3) + 2] = b * 16;
+            out[(idx * 3) + 0] = r * 16;
+            out[(idx * 3) + 1] = g * 16;
+            out[(idx * 3) + 2] = b * 16;
         }
     }
 }
@@ -224,7 +235,10 @@ unsigned long millis_since_epoch() {
     return (tv.tv_sec * 1000) + (tv.tv_usec / 1000);
 }
 
-void display() {
+uint32_t g_LastTimestamp = 0;
+void display(void) {
+    uint32_t ms;
+
     glClearColor(0, 0, 0, 0);
     glClear(GL_COLOR_BUFFER_BIT);
 
@@ -236,9 +250,14 @@ void display() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 
-    if (cdg_reader_advance_to(&g_Reader, (millis_since_epoch() - g_Start))) {
-        cdg_state_fb_to_8_bit_color(&g_Reader.state, g_TexBuffer);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 300, 216, 0, GL_RGB, GL_UNSIGNED_BYTE, g_TexBuffer);
+    if (g_LastTimestamp == 0) {
+        g_LastTimestamp = ATOMIC_INT_GET(g_AudioState.timestamp);
+    } else {
+        ms = ATOMIC_INT_GET(g_AudioState.timestamp) - g_LastTimestamp;
+        if (cdg_reader_advance_to(&g_Reader, ms)) {
+            cdg_state_fb_to_8_bit_color(&g_Reader.state, g_TexBuffer);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 300, 216, 0, GL_RGB, GL_UNSIGNED_BYTE, g_TexBuffer);
+        }
     }
 
     glBegin(GL_QUADS);
@@ -276,8 +295,26 @@ void resizeCallback(int width, int height) {
     }
 }
 
+static const char *mp3Path;
+
+void *threadCallback(void *userData) {
+    struct audio_state *state = (struct audio_state *) userData;
+
+    start_mp3_playback(mp3Path, state);
+
+
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
     FILE *fp;
+
+    if (argc != 3) {
+        fprintf(stderr, "usage: %s <cdg> <mp3>\n", argv[0]);
+        return 1;
+    }
+
+    mp3Path = argv[2];
 
     memset(&g_Reader, 0, sizeof(struct cdg_reader));
     fp = fopen(argv[1], "r");
@@ -304,6 +341,8 @@ int main(int argc, char *argv[]) {
 
     glutDisplayFunc(display);
     glutReshapeFunc(resizeCallback);
+
+    pthread_create(&g_AudioState.thread, NULL, threadCallback, &g_AudioState);
 
     glutMainLoop();
 

@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <malloc.h>
 
-static int read_file(const char *path, char **buf) {
+int read_file(const char *path, uint8_t **buf, unsigned long *size) {
     FILE *fp;
 
     fp = fopen(path, "r");
@@ -12,17 +12,17 @@ static int read_file(const char *path, char **buf) {
     }
 
     fseek(fp, 0, SEEK_END);
-    unsigned long size = ftell(fp);
+    *size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
 
-    *buf = (char *)malloc(size + 1);
-    if (fread(*buf, 1, size, fp) != size) {
+    *buf = (char *)malloc((*size) + 1);
+    if (fread(*buf, 1, *size, fp) != *size) {
         free(*buf);
         fclose(fp);
         return 0;
     }
 
-    (*buf)[size] = '\0';
+    (*buf)[*size] = '\0';
 
     fclose(fp);
 
@@ -36,6 +36,7 @@ GLuint load_shader_program(const char *name) {
     char frag_path[256];
     char *vert_src;
     char *frag_src;
+    unsigned long ln;
 
     snprintf(vert_path, sizeof(vert_path), "shaders/%s.vert", name);
     snprintf(frag_path, sizeof(frag_path), "shaders/%s.frag", name);
@@ -43,12 +44,12 @@ GLuint load_shader_program(const char *name) {
     GLuint vert_shader = glCreateShader(GL_VERTEX_SHADER);
     GLuint frag_shader = glCreateShader(GL_FRAGMENT_SHADER);
 
-    if (!read_file(vert_path, &vert_src)) {
+    if (!read_file(vert_path, &vert_src, &ln)) {
         fprintf(stderr, "failed to read vertex shader source\n");
         return 0;
     }
 
-    if (!read_file(frag_path, &frag_src)) {
+    if (!read_file(frag_path, &frag_src, &ln)) {
         fprintf(stderr, "failed to read fragment shader source\n");
         return 0;
     }

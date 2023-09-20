@@ -1,7 +1,7 @@
 CC      := gcc
 CFLAGS  := -Wall -Wextra -Wno-cpp -std=c99 -pedantic -D_FORTIFY_SOURCE=2 -O1 -g
-LDFLAGS := -lGL -lGLEW -lglut -lpng
-OBJECTS := util.o render.o cdg.o
+LDFLAGS := -lGL -lGLEW -lglut -lportaudio
+OBJECTS := util.o audio.o render.o cdg.o
 BINARY  := cdg
 
 all: $(BINARY)
