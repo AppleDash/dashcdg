@@ -2,81 +2,69 @@
 
 #include <stdio.h>
 #include <unistd.h>
-#include <pthread.h>
-#include <soundio/soundio.h>
 
 #define MINIMP3_IMPLEMENTATION
 #include "minimp3.h"
 
 #include "util.h"
 
-struct high_low_buffer *high_low_buffer_new(size_t size) {
-    struct high_low_buffer *hlb;
+struct pcm_buffer *pcm_buffer_new(size_t size) {
+    struct pcm_buffer *pcm;
 
-    hlb = (struct high_low_buffer *) malloc(sizeof(struct high_low_buffer));
+    pcm = (struct pcm_buffer *) malloc(sizeof(struct pcm_buffer));
 
-    if (hlb == NULL) {
+    if (pcm == NULL) {
         fprintf(stderr, "failed to allocate memory\n");
         exit(1);
     }
 
-    hlb->lowWaterMark = 0;
-    hlb->size = 0;
-    hlb->capacity = size;
-    hlb->buffer = (uint16_t *) malloc(size * sizeof(uint16_t));
+    pcm->size = 0;
+    pcm->capacity = size;
+    pcm->buffer = (uint16_t *) malloc(size * sizeof(uint16_t));
 
-    if (hlb->buffer == NULL) {
+    if (pcm->buffer == NULL) {
         fprintf(stderr, "failed to allocate memory\n");
         exit(1);
     }
 
-    return hlb;
+    return pcm;
 }
 
-void high_low_buffer_append(struct high_low_buffer *hlb, uint16_t *buf, size_t size) {
-    if (hlb->size + size > hlb->capacity) {
-        hlb->capacity = hlb->size + size;
-        hlb->buffer = (uint16_t *) realloc(hlb->buffer, sizeof(uint16_t) * hlb->capacity);
+void high_low_buffer_append(struct pcm_buffer *pcm, uint16_t *buf, size_t size) {
+    if (pcm->size + size > pcm->capacity) {
+        pcm->capacity = pcm->size + size;
+        pcm->buffer = (uint16_t *) realloc(pcm->buffer, sizeof(uint16_t) * pcm->capacity);
 
-        if (hlb->buffer == NULL) {
+        if (pcm->buffer == NULL) {
             fprintf(stderr, "failed to allocate memory\n");
             exit(1);
         }
     }
 
-    memcpy(hlb->buffer + hlb->size, buf, size * sizeof(uint16_t));
-    hlb->size += size;
+    memcpy(pcm->buffer + pcm->size, buf, size * sizeof(uint16_t));
+    pcm->size += size;
 }
 
-void high_low_buffer_consume(struct high_low_buffer *hlb, size_t size, uint16_t *buf) {
-    if (size > hlb->size) {
-        fprintf(stderr, "high_low_buffer_consume(): size > hlb->size\n");
+void pcm_buffer_consume(struct pcm_buffer *pcm, size_t size, uint16_t *buf) {
+    if (size > pcm->size) {
+        fprintf(stderr, "pcm_buffer_consume(): size > pcm->size\n");
         exit(1);
     }
 
-    hlb->size -= size;
+    pcm->size -= size;
 
-    memcpy(buf, hlb->buffer, size * sizeof(uint16_t));
-    memmove(hlb->buffer, hlb->buffer + size, hlb->size * sizeof(uint16_t));
+    memcpy(buf, pcm->buffer, size * sizeof(uint16_t));
+    memmove(pcm->buffer, pcm->buffer + size, pcm->size * sizeof(uint16_t));
 }
 
-static int stdoutCopy;
-static int stderrCopy;
+void pcm_buffer_free(struct pcm_buffer *pcm) {
+    if (pcm) {
+        if (pcm->buffer) {
+            free(pcm->buffer);
+        }
 
-static void backup_and_close_stdout_stderr(void) {
-    stdoutCopy = dup(STDOUT_FILENO);
-    stderrCopy = dup(STDERR_FILENO);
-
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
-}
-
-static void restore_stdout_stderr(void) {
-    dup2(stdoutCopy, STDOUT_FILENO);
-    dup2(stderrCopy, STDERR_FILENO);
-
-    close(stdoutCopy);
-    close(stderrCopy);
+        free(pcm);
+    }
 }
 
 static int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long frameCount,
@@ -115,12 +103,14 @@ static int create_pa_stream(struct audio_state *state) {
 static int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long frameCount,
                       const PaStreamCallbackTimeInfo *timeInfo, PaStreamCallbackFlags statusFlags,
                         void *userData) {
+    UNUSED(inputBuffer); UNUSED(statusFlags);
+
     struct audio_state *state = (struct audio_state *) userData;
     PaTime timestamp = timeInfo->outputBufferDacTime;
 
     int channels = state->headerInfo.channels;
 
-    while (state->hlb->size < (frameCount * channels)) {
+    while (state->pcm->size < (frameCount * channels)) {
         mp3dec_frame_info_t info;
         mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
 
@@ -128,13 +118,13 @@ static int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long
 
         if (samples) {
             state->buffer_offset += info.frame_bytes;
-            high_low_buffer_append(state->hlb, (uint16_t *) pcm, samples * channels);
+            high_low_buffer_append(state->pcm, (uint16_t *) pcm, samples * channels);
         } else {
             break;
         }
     }
 
-    high_low_buffer_consume(state->hlb, frameCount * channels, (uint16_t *) outputBuffer);
+    pcm_buffer_consume(state->pcm, frameCount * channels, (uint16_t *) outputBuffer);
 
     ATOMIC_INT_SET(state->timestamp, (int) (timestamp * 1000));
 
@@ -143,17 +133,23 @@ static int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long
 
 /* Decode the first frame of the MP3 file to get the header information */
 static void decode_first_frame(struct audio_state *state) {
-    int16_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
+    mp3d_sample_t pcm[MINIMP3_MAX_SAMPLES_PER_FRAME];
 
     int samples = mp3dec_decode_frame(&state->mp3d, state->buffer, state->buffer_size, pcm, &(state->headerInfo));
 
     if (samples) {
         state->buffer_offset += state->headerInfo.frame_bytes;
-        high_low_buffer_append(state->hlb, (uint16_t *) pcm, samples * sizeof(int16_t));
+        high_low_buffer_append(state->pcm, (uint16_t *) pcm, samples * sizeof(int16_t));
     }
 }
 
-int start_mp3_playback(const char *path, struct audio_state *state) {
+void audio_state_seek(struct audio_state *state, uint32_t ms) {
+    int samples = (int) ((ms / 1000.0) * state->headerInfo.hz);
+    // use mp3dec_ex_seek
+
+}
+
+int play_mp3(const char *path, struct audio_state *state) {
     memset(state, 0, sizeof(struct audio_state));
 
     if (!read_file(path, (char **) &state->buffer, &state->buffer_size)) {
@@ -161,7 +157,7 @@ int start_mp3_playback(const char *path, struct audio_state *state) {
         return 0;
     }
 
-    state->hlb = high_low_buffer_new(2048);
+    state->pcm = pcm_buffer_new(2048);
     mp3dec_init(&state->mp3d);
     decode_first_frame(state);
 
@@ -170,9 +166,12 @@ int start_mp3_playback(const char *path, struct audio_state *state) {
         return 0;
     }
 
-//    while (Pa_IsStreamActive(state->stream)) {
-//        Pa_Sleep(100);
-//    }
+    while (Pa_IsStreamActive(state->stream)) {
+        Pa_Sleep(100);
+    }
+
+    pcm_buffer_free(state->pcm);
+    Pa_CloseStream(state->stream);
 
     return 1;
 }

@@ -1,87 +1,9 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h> /* ntohs() */
 
 #include "cdg.h"
-
-int read_subchannel_packet(FILE *fp, struct subchannel_packet *pkt) {
-    return fread(pkt, 1, sizeof(struct subchannel_packet), fp) == sizeof(struct subchannel_packet);
-}
-
-void print_cdg_insn_memory_preset(struct cdg_insn_memory_preset *insn) {
-    printf("MEMORY PRESET { color = %02X, repeat = %02X }\n", insn->color, insn->repeat);
-}
-
-void print_cdg_insn_border_preset(struct cdg_insn_border_preset *insn) {
-    printf("BORDER PRESET { color = %02X }\n", insn->color);
-}
-
-void print_cdg_insn_tile_block(const char *tag, struct cdg_insn_tile_block *insn) {
-    printf("TILE BLOCK %s { color_0 = %02X, color_1 = %02X, row = %02X, column = %02X, pixels = ", tag, insn->color_0, insn->color_1, insn->row, insn->column);
-
-    for (int i = 0; i < 12; i++) {
-        printf("%02X ", insn->pixels[i]);
-    }
-
-    printf("}\n");
-}
-
-void print_cdg_insn_scroll_preset(struct cdg_insn_scroll *insn) {
-    printf("SCROLL PRESET { color = %02X, h_scroll = %02X, v_scroll = %02X }\n", insn->color, insn->h_scroll, insn->v_scroll);
-}
-
-void print_cdg_insn_scroll_copy(struct cdg_insn_scroll *insn) {
-    printf("SCROLL COPY { color = %02X, h_scroll = %02X, v_scroll = %02X }\n", insn->color, insn->h_scroll, insn->v_scroll);
-}
-
-void print_cdg_insn_define_transparent(struct cdg_insn_define_transparent *insn) {
-    printf("DEFINE TRANSPARENT\n");
-}
-
-void print_cdg_insn_load_color_table(const char *tag, struct cdg_insn_load_color_table *insn) {
-    printf("LOAD COLOR TABLE %s { spec = ", tag);
-
-    for (int i = 0; i < 8; i++) {
-        printf("%04X ", insn->spec[i]);
-    }
-
-    printf("}\n");
-}
-
-void process_cdg_insn(struct subchannel_packet *pkt) {
-    switch (pkt->instruction) {
-        case CDG_INSN_MEMORY_PRESET:
-            print_cdg_insn_memory_preset((struct cdg_insn_memory_preset *) pkt->data);
-            break;
-        case CDG_INSN_BORDER_PRESET:
-            print_cdg_insn_border_preset((struct cdg_insn_border_preset *) pkt->data);
-            break;
-        case CDG_INSN_TILE_BLOCK:
-            print_cdg_insn_tile_block("NORMAL", (struct cdg_insn_tile_block *) pkt->data);
-            break;
-        case CDG_INSN_SCROLL_PRESET:
-            print_cdg_insn_scroll_preset((struct cdg_insn_scroll *) pkt->data);
-            break;
-        case CDG_INSN_SCROLL_COPY:
-            print_cdg_insn_scroll_copy((struct cdg_insn_scroll *) pkt->data);
-            break;
-        case CDG_INSN_DEF_TRANSPARENT:
-            print_cdg_insn_define_transparent((struct cdg_insn_define_transparent *) pkt->data);
-            break;
-        case CDG_INSN_LOAD_COLOR_TABLE_00:
-            print_cdg_insn_load_color_table("0-7", (struct cdg_insn_load_color_table *) pkt->data);
-            break;
-        case CDG_INSN_LOAD_COLOR_TABLE_08:
-            print_cdg_insn_load_color_table("8-15", (struct cdg_insn_load_color_table *) pkt->data);
-            break;
-        case CDG_INSN_TILE_BLOCK_XOR:
-            print_cdg_insn_tile_block("XOR", (struct cdg_insn_tile_block *) pkt->data);
-            break;
-        default:
-            printf("UNKNOWN INSTRUCTION\n");
-            break;
-    }
-}
 
 static inline int cdg_color_to_rgb(uint16_t color) {
     /*
@@ -95,6 +17,24 @@ static inline int cdg_color_to_rgb(uint16_t color) {
     int b = (color & 0xF) * 16;
 
     return (r << 16) | (g << 8) | b;
+}
+
+int cdg_reader_read_frame(struct cdg_reader *reader, struct subchannel_packet *outPkt) {
+    size_t count = sizeof(struct subchannel_packet);
+
+    if (reader->buffer_index + count > reader->buffer_size) {
+        return 0;
+    }
+
+    memcpy(outPkt, reader->buffer + reader->buffer_index, count);
+    reader->buffer_index += count;
+
+    return 1;
+}
+
+void cdg_reader_reset(struct cdg_reader *reader) {
+    reader->buffer_index = 0;
+    reader->eof = 0;
 }
 
 // Returns an integer representing the number of milliseconds elapsed since the start of the CDG stream.
@@ -118,34 +58,20 @@ int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pk
     code = pkt->instruction;
     insn = (struct cdg_insn *) pkt->data;
 
-    //process_cdg_insn(pkt);
-
     switch (code) {
         // Load colors 0-7
-        case CDG_INSN_LOAD_COLOR_TABLE_00: {
-            struct cdg_insn_load_color_table *insn_load_color_table = (struct cdg_insn_load_color_table *) insn;
-
-            for (int i = 0; i < 8; i++) {
-                state->color_table[i] = cdg_color_to_rgb(ntohs(insn_load_color_table->spec[i] & 0x3F3F));
-            }
-
-            return 1;
-        }
-            break;
-
-            // Load colors 8-15
+        case CDG_INSN_LOAD_COLOR_TABLE_00:
         case CDG_INSN_LOAD_COLOR_TABLE_08: {
             struct cdg_insn_load_color_table *insn_load_color_table = (struct cdg_insn_load_color_table *) insn;
+            size_t offset = code == CDG_INSN_LOAD_COLOR_TABLE_00 ? 0 : 8;
 
             for (int i = 0; i < 8; i++) {
-                state->color_table[i + 8] = cdg_color_to_rgb(ntohs(insn_load_color_table->spec[i] & 0x3F3F));
+                state->color_table[i + offset] = cdg_color_to_rgb(ntohs(insn_load_color_table->spec[i] & 0x3F3F));
             }
 
             return 1;
         }
-            break;
-
-            // Clear the screen
+        // Clear the screen
         case CDG_INSN_MEMORY_PRESET: {
             struct cdg_insn_memory_preset *insn_memory_preset = (struct cdg_insn_memory_preset *) insn;
 
@@ -158,13 +84,11 @@ int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pk
 
             return 1;
         }
-            break;
-
         case CDG_INSN_BORDER_PRESET: {
-            printf("BORDER\n");
-            //The border area is the area contained with a
-            //rectangle defined by (0,0,300,216) minus the interior pixels which are contained
-            //within a rectangle defined by (6,12,294,204).
+            // printf("BORDER\n");
+            // The border area is the area contained with a
+            // rectangle defined by (0,0,300,216) minus the interior pixels which are contained
+            // within a rectangle defined by (6,12,294,204).
             struct cdg_insn_border_preset *insn_border_preset = (struct cdg_insn_border_preset *) insn;
 
             for (int x = 0; x < 300; x++) {
@@ -182,9 +106,7 @@ int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pk
             }
             return 1;
         }
-            break;
-
-            // Copy a block of pixels into the framebuffer
+        // Copy a block of pixels into the framebuffer
         case CDG_INSN_TILE_BLOCK:
         case CDG_INSN_TILE_BLOCK_XOR: {
             struct cdg_insn_tile_block *insn_tile_block = (struct cdg_insn_tile_block *) insn;
@@ -219,23 +141,50 @@ int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pk
 
             return 1;
         }
-            break;
-
         case CDG_INSN_SCROLL_PRESET:
         case CDG_INSN_SCROLL_COPY: {
             // TODO: implement - I haven't seen this in any CDG files yet
-            printf("they be doing scrolling\n");
-            struct cdg_insn_scroll *insn_scroll = (struct cdg_insn_scroll *) insn;
-            uint8_t color = insn_scroll->color;
-            uint8_t h_scroll = insn_scroll->h_scroll;
-            uint8_t v_scroll = insn_scroll->v_scroll;
+            printf("*** Unsupported scrolling instruction!\n");
+//            struct cdg_insn_scroll *insn_scroll = (struct cdg_insn_scroll *) insn;
+//            uint8_t color = insn_scroll->color;
+//            uint8_t h_scroll = insn_scroll->h_scroll;
+//            uint8_t v_scroll = insn_scroll->v_scroll;
         }
-            break;
+        break;
         default:
             printf("unexpected insn: %d\n", code);
     }
 
     return 0;
+}
+
+int cdg_reader_load_file(struct cdg_reader *reader, const char *path) {
+    FILE *fp;
+
+    fp = fopen(path, "r");
+
+    if (!fp) {
+        return 0;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    reader->buffer_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    reader->buffer_index = 0;
+    reader->buffer = (uint8_t *) malloc(reader->buffer_size);
+
+    if (fread(reader->buffer, 1, reader->buffer_size, fp) != reader->buffer_size) {
+        fclose(fp);
+
+        free(reader->buffer);
+        reader->buffer = NULL;
+        reader->buffer_size = 0;
+
+        return 0;
+    }
+
+    return 1;
 }
 
 // Returns: 1 if we need to update the framebuffer
@@ -244,7 +193,7 @@ int cdg_reader_advance_to(struct cdg_reader *reader, uint32_t timestamp) {
     int needsUpdate = 0;
 
     while (cdg_state_get_time_elapsed(&reader->state) < timestamp) {
-        if (!reader->read_callback(reader->userData, &insn)) {
+        if (!cdg_reader_read_frame(reader, &insn)) {
             // End of CDG stream
             reader->eof = 1;
             break;
@@ -257,30 +206,103 @@ int cdg_reader_advance_to(struct cdg_reader *reader, uint32_t timestamp) {
     return needsUpdate;
 }
 
-int testMain(int argc, char *argv[]) {
-    struct subchannel_packet pkt;
+int cdg_reader_build_keyframe_list(struct cdg_reader *reader, struct cdg_keyframe_list **outList) {
+    struct cdg_keyframe_list *list = NULL;
+    struct cdg_keyframe_list *last = NULL;
+    struct cdg_keyframe *keyframe = NULL;
+    struct subchannel_packet insn;
+    uint32_t ts = 0;
+    int keyframeCount = 0;
+    int colorTable[16] = { 0 };
 
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <file>\n", argv[0]);
-        return 1;
-    }
+    while (cdg_reader_read_frame(reader, &insn)) {
+        ts++;
 
-    FILE *fp;
+        if (insn.command != 9)  {
+            continue;
+        }
 
-    fp = fopen(argv[1], "r");
+        if (insn.instruction == CDG_INSN_LOAD_COLOR_TABLE_00) {
+            for (int i = 0; i < 8; i++) {
+                colorTable[i] = ntohs(((struct cdg_insn_load_color_table *) insn.data)->spec[i]);
+            }
+        } else if (insn.instruction == CDG_INSN_LOAD_COLOR_TABLE_08) {
+            for (int i = 0; i < 8; i++) {
+                colorTable[i + 8] = ntohs(((struct cdg_insn_load_color_table *) insn.data)->spec[i]);
+            }
+        } else if (insn.instruction == CDG_INSN_MEMORY_PRESET) {
+            if (last) {
+                last->next = malloc(sizeof(struct cdg_keyframe_list));
+                last = last->next;
+            } else {
+                list = malloc(sizeof(struct cdg_keyframe_list));
+                last = list;
+            }
 
-    if (!fp) {
-        fprintf(stderr, "failed to open file\n");
-        return 1;
-    }
+            keyframe = malloc(sizeof(struct cdg_keyframe));
+            keyframe->timestamp = ts;
+            memcpy(keyframe->color_table, colorTable, sizeof(keyframe->color_table));
+            keyframe->clear_color = ((struct cdg_insn_memory_preset *) insn.data)->color;
 
-    while (!feof(fp) && read_subchannel_packet(fp, &pkt)) {
-        if ((pkt.command & 0x3F /* 0b111111 */) == 9) {
-            process_cdg_insn(&pkt);
+            last->keyframe = keyframe;
+            last->next = NULL;
+
+            keyframeCount++;
         }
     }
 
-    fclose(fp);
+    cdg_reader_reset(reader);
 
-    return 0;
+    printf("built %d keyframes\n", keyframeCount);
+    *outList = list;
+
+    return 1;
+}
+
+void cdg_reader_free_keyframe_list(struct cdg_keyframe_list *list) {
+    struct cdg_keyframe_list *next;
+
+    while (list) {
+        next = list->next;
+        free(list->keyframe);
+        free(list);
+        list = next;
+    }
+}
+
+void cdg_reader_seek_to_keyframe(struct cdg_reader *reader, struct cdg_keyframe *keyframe) {
+    reader->state.subchannel_packet_count = keyframe->timestamp;
+
+    memcpy(reader->state.color_table, keyframe->color_table, sizeof(reader->state.color_table));
+    // Clear the screen
+    memset(reader->state.framebuffer, keyframe->clear_color, (300 * 216) * sizeof(unsigned int));
+}
+
+// Closest, without going over - like The Price is Right :-)
+struct cdg_keyframe *cdg_reader_find_closest_keyframe(struct cdg_keyframe_list *list, uint32_t ts) {
+    struct cdg_keyframe_list *cur;
+    struct cdg_keyframe_list *prev;
+
+    cur = list;
+    prev = NULL;
+
+    while (cur) {
+        if (cur->keyframe->timestamp > ts) {
+            break;
+        }
+
+        prev = cur;
+        cur = cur->next;
+    }
+
+    return prev->keyframe;
+}
+
+int cdg_reader_seek_to_timestamp(struct cdg_reader *reader, uint32_t ts) {
+    struct cdg_keyframe *keyframe;
+
+    keyframe = cdg_reader_find_closest_keyframe(reader->keyframe_list, ts);
+    cdg_reader_seek_to_keyframe(reader, keyframe);
+
+    return cdg_reader_advance_to(reader, ts);
 }

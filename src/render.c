@@ -12,55 +12,15 @@ struct {
     GLint framebufferLocation;
 } g_Shader;
 
-static const char *g_Mp3Path;
 static GLuint g_TextureId = 0;
 static uint32_t g_StartTimestamp = 0;
 static struct cdg_reader g_Reader;
 static struct audio_state g_AudioState;
 
-static int read_chunk_from_file(void *userData, struct subchannel_packet *outPkt) {
-    FILE *fp = (FILE *) userData;
-
-    return !feof(fp)
-           && !ferror(fp)
-           && (fread(outPkt, 1, sizeof(struct subchannel_packet), fp) == sizeof(struct subchannel_packet));
-}
-
-static void checkGlError(const char *where) {
-    GLenum error;
-    const char *errorString;
-
-    /* Check errors from the last frame rendered */
-    while ((error = glGetError()) != GL_NO_ERROR) {
-        switch (error) {
-            case GL_INVALID_ENUM:
-                errorString = "invalid enum";
-                break;
-            case GL_INVALID_VALUE:
-                errorString = "invalid value";
-                break;
-            case GL_INVALID_OPERATION:
-                errorString = "invalid operation";
-                break;
-            case GL_STACK_OVERFLOW:
-                errorString = "stack overflow";
-                break;
-            case GL_STACK_UNDERFLOW:
-                errorString = "stack underflow";
-                break;
-            case GL_OUT_OF_MEMORY:
-                errorString = "out of memory";
-                break;
-            case GL_INVALID_FRAMEBUFFER_OPERATION:
-                errorString = "invalid framebuffer operation";
-                break;
-            default:
-                errorString = "unknown";
-                break;
-        }
-        fprintf(stderr, "GL ERROR at %s: %d (%s)\n", where, error, errorString);
-    }
-}
+struct mp3_playback_data {
+    char *path;
+    struct audio_state *state;
+} g_PlaybackData;
 
 void display(void) {
     uint32_t ms;
@@ -117,33 +77,35 @@ void resizeCallback(int width, int height) {
     }
 }
 
-static void *threadCallback(void *userData) {
-    start_mp3_playback(g_Mp3Path, (struct audio_state *) userData);
+static void *mp3_player_thread_callback(void *userData) {
+    struct mp3_playback_data *data = (struct mp3_playback_data *) userData;
+
+    if (!play_mp3(data->path, data->state)) {
+        fprintf(stderr, "failed to start MP3 playback\n");
+        return NULL;
+    }
 
     return NULL;
 }
 
 int main(int argc, char *argv[]) {
-    FILE *fp;
-
+    struct cdg_keyframe_list *list;
     if (argc != 3) {
         fprintf(stderr, "usage: %s <cdg> <mp3>\n", argv[0]);
         return 1;
     }
 
-    g_Mp3Path = argv[2];
-
+    // Set up the CDG reader
     memset(&g_Reader, 0, sizeof(struct cdg_reader));
-    fp = fopen(argv[1], "r");
 
-    if (!fp) {
+    if (!cdg_reader_load_file(&g_Reader, argv[1])) {
         fprintf(stderr, "failed to open file\n");
         return 1;
     }
 
-    g_Reader.userData = fp;
-    g_Reader.read_callback = read_chunk_from_file;
+    cdg_reader_build_keyframe_list(&g_Reader, &list);
 
+    // Set up OpenGL
     glutInit(&argc, argv);
 
     glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
@@ -172,8 +134,13 @@ int main(int argc, char *argv[]) {
     glutDisplayFunc(display);
     glutReshapeFunc(resizeCallback);
 
-    pthread_create(&g_AudioState.thread, NULL, threadCallback, &g_AudioState);
+    // Set up the MP3 player
+    g_PlaybackData.path = argv[2];
+    g_PlaybackData.state = &g_AudioState;
 
+    pthread_create(&g_AudioState.thread, NULL, mp3_player_thread_callback, &g_PlaybackData);
+
+    // Start rendering
     glutMainLoop();
 
     return 0;

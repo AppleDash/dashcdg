@@ -7,14 +7,12 @@
 #include "util.h"
 #include "minimp3.h"
 
-struct high_low_buffer {
-    size_t lowWaterMark;
+struct pcm_buffer {
     size_t size;
     size_t capacity;
 
     uint16_t *buffer;
 };
-
 
 struct audio_state {
     /* MP3 data buffer */
@@ -23,7 +21,7 @@ struct audio_state {
     size_t buffer_offset;
 
     /* PCM data buffer */
-    struct high_low_buffer *hlb;
+    struct pcm_buffer *pcm;
 
     mp3dec_t mp3d;
     mp3dec_frame_info_t headerInfo;
@@ -33,7 +31,8 @@ struct audio_state {
     ATOMIC_INT timestamp; /* In milliseconds */
 };
 
-int start_mp3_playback(const char *path, struct audio_state *state);
+void audio_state_seek(struct audio_state *state, uint32_t ms);
+int play_mp3(const char *path, struct audio_state *state);
 
 
 #endif // _AUDIO_H_INCLUDED

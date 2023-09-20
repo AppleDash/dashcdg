@@ -68,10 +68,15 @@ struct cdg_insn_load_color_table {
 // return: 0 -> eof, 1 -> read an instruction, 2 -> read an empty subchannel packet
 typedef int (*cdg_reader_read_callback)(void *userData, struct subchannel_packet *outPkt);
 
-struct cdg_snapshot {
+struct cdg_keyframe {
     uint32_t timestamp;      // subchannel packet count
     uint8_t color_table[16];
     uint8_t clear_color;
+};
+
+struct cdg_keyframe_list {
+    struct cdg_keyframe *keyframe;
+    struct cdg_keyframe_list *next;
 };
 
 struct cdg_state {
@@ -82,14 +87,38 @@ struct cdg_state {
 
 struct cdg_reader {
     int eof;
+    uint8_t *buffer;
+    size_t buffer_size;
+    size_t buffer_index;
+
     struct cdg_state state;
-    void *userData;
-    // called when the cdg reader needs to read a CDG instruction
-    cdg_reader_read_callback read_callback;
 };
 
+/* Get the time elapsed in milliseconds since the start of the CDG file */
 uint32_t cdg_state_get_time_elapsed(struct cdg_state *state);
+
+/* Process an instruction and update the state */
 int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pkt);
+
+/* Load a CDG file into a reader */
+int cdg_reader_load_file(struct cdg_reader *reader, const char *path);
+
+/* Read a frame from the CDG buffer into the given packet */
+int cdg_reader_read_frame(struct cdg_reader *reader, struct subchannel_packet *outPkt);
+
+/* Reset the reader to the beginning of the CDG file */
+void cdg_reader_reset(struct cdg_reader *reader);
+
+/* Advance the reader to the given timestamp, processing any commands between the current timestamp and the one we're advancing to. */
 int cdg_reader_advance_to(struct cdg_reader *reader, uint32_t timestamp);
+
+/* Build a list of seek snapshots from the CDG reader */
+int cdg_reader_build_keyframe_list(struct cdg_reader *reader, struct cdg_keyframe_list **outList);
+
+/* Free a keyframe list */
+void cdg_reader_free_keyframe_list(struct cdg_keyframe_list *list);
+
+/* Seek to the given keyframe */
+void cdg_reader_seek_to_keyframe(struct cdg_reader *reader, struct cdg_keyframe *keyframe);
 
 #endif // _CDG_H_INCLUDED
