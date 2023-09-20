@@ -6,9 +6,6 @@
 #include "cdg.h"
 #include "audio.h"
 
-
-void process_cdg_insn(struct subchannel_packet *pkt);
-
 static const char *g_Mp3Path;
 static GLuint g_TextureId = 0;
 static uint8_t g_TexBuffer[300 * 216 * 3];
@@ -99,12 +96,8 @@ void resizeCallback(int width, int height) {
     }
 }
 
-
 static void *threadCallback(void *userData) {
-    struct audio_state *state = (struct audio_state *) userData;
-
-    start_mp3_playback(g_Mp3Path, state);
-
+    start_mp3_playback(g_Mp3Path, (struct audio_state *) userData);
 
     return NULL;
 }

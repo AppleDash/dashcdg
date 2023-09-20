@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <malloc.h>
 
-int read_file(const char *path, uint8_t **buf, unsigned long *size) {
+int read_file(const char *path, char **buf, unsigned long *size) {
     FILE *fp;
 
     fp = fopen(path, "r");
@@ -15,7 +15,7 @@ int read_file(const char *path, uint8_t **buf, unsigned long *size) {
     *size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
 
-    *buf = (char *)malloc((*size) + 1);
+    *buf = (char *) malloc((*size) + 1);
     if (fread(*buf, 1, *size, fp) != *size) {
         free(*buf);
         fclose(fp);
