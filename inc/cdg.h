@@ -75,8 +75,8 @@ struct cdg_keyframe {
 };
 
 struct cdg_keyframe_list {
-    struct cdg_keyframe *keyframe;
-    struct cdg_keyframe_list *next;
+    size_t count;
+    struct cdg_keyframe *keyframes;
 };
 
 struct cdg_state {
@@ -92,6 +92,7 @@ struct cdg_reader {
     size_t buffer_index;
 
     struct cdg_state state;
+    struct cdg_keyframe_list keyframes;
 };
 
 /* Get the time elapsed in milliseconds since the start of the CDG file */
@@ -113,7 +114,7 @@ void cdg_reader_reset(struct cdg_reader *reader);
 int cdg_reader_advance_to(struct cdg_reader *reader, uint32_t timestamp);
 
 /* Build a list of seek snapshots from the CDG reader */
-int cdg_reader_build_keyframe_list(struct cdg_reader *reader, struct cdg_keyframe_list **outList);
+int cdg_reader_build_keyframe_list(struct cdg_reader *reader);
 
 /* Free a keyframe list */
 void cdg_reader_free_keyframe_list(struct cdg_keyframe_list *list);

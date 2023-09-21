@@ -89,7 +89,6 @@ static void *mp3_player_thread_callback(void *userData) {
 }
 
 int main(int argc, char *argv[]) {
-    struct cdg_keyframe_list *list;
     if (argc != 3) {
         fprintf(stderr, "usage: %s <cdg> <mp3>\n", argv[0]);
         return 1;
@@ -103,7 +102,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    cdg_reader_build_keyframe_list(&g_Reader, &list);
+    cdg_reader_build_keyframe_list(&g_Reader);
 
     // Set up OpenGL
     glutInit(&argc, argv);

@@ -1,9 +1,11 @@
 #include <stdio.h>
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <arpa/inet.h> /* ntohs() */
 
 #include "cdg.h"
+#include "util.h"
 
 static inline int cdg_color_to_rgb(uint16_t color) {
     /*
@@ -174,6 +176,8 @@ int cdg_reader_load_file(struct cdg_reader *reader, const char *path) {
     reader->buffer_index = 0;
     reader->buffer = (uint8_t *) malloc(reader->buffer_size);
 
+    CHECK_MEM(reader->buffer)
+
     if (fread(reader->buffer, 1, reader->buffer_size, fp) != reader->buffer_size) {
         fclose(fp);
 
@@ -206,14 +210,14 @@ int cdg_reader_advance_to(struct cdg_reader *reader, uint32_t timestamp) {
     return needsUpdate;
 }
 
-int cdg_reader_build_keyframe_list(struct cdg_reader *reader, struct cdg_keyframe_list **outList) {
-    struct cdg_keyframe_list *list = NULL;
-    struct cdg_keyframe_list *last = NULL;
-    struct cdg_keyframe *keyframe = NULL;
+int cdg_reader_build_keyframe_list(struct cdg_reader *reader) {
     struct subchannel_packet insn;
+    struct cdg_keyframe *keyframe;
+
     uint32_t ts = 0;
-    int keyframeCount = 0;
     int colorTable[16] = { 0 };
+
+    struct cdg_keyframe_list *list = &reader->keyframes;
 
     while (cdg_reader_read_frame(reader, &insn)) {
         ts++;
@@ -231,42 +235,35 @@ int cdg_reader_build_keyframe_list(struct cdg_reader *reader, struct cdg_keyfram
                 colorTable[i + 8] = ntohs(((struct cdg_insn_load_color_table *) insn.data)->spec[i]);
             }
         } else if (insn.instruction == CDG_INSN_MEMORY_PRESET) {
-            if (last) {
-                last->next = malloc(sizeof(struct cdg_keyframe_list));
-                last = last->next;
-            } else {
-                list = malloc(sizeof(struct cdg_keyframe_list));
-                last = list;
-            }
+            list->keyframes = (struct cdg_keyframe *) realloc(
+                    list->keyframes,
+                    sizeof(struct cdg_keyframe) * list->count
+            );
 
-            keyframe = malloc(sizeof(struct cdg_keyframe));
+            CHECK_MEM(list->keyframes)
+
+            keyframe = &list->keyframes[list->count];
+
             keyframe->timestamp = ts;
-            memcpy(keyframe->color_table, colorTable, sizeof(keyframe->color_table));
+            memcpy(keyframe->color_table, colorTable, sizeof(colorTable));
             keyframe->clear_color = ((struct cdg_insn_memory_preset *) insn.data)->color;
 
-            last->keyframe = keyframe;
-            last->next = NULL;
-
-            keyframeCount++;
+            list->count++;
         }
     }
 
     cdg_reader_reset(reader);
 
-    printf("built %d keyframes\n", keyframeCount);
-    *outList = list;
-
     return 1;
 }
 
 void cdg_reader_free_keyframe_list(struct cdg_keyframe_list *list) {
-    struct cdg_keyframe_list *next;
+    if (list) {
+        if (list->keyframes) {
+            free(list->keyframes);
+        }
 
-    while (list) {
-        next = list->next;
-        free(list->keyframe);
         free(list);
-        list = next;
     }
 }
 
@@ -280,28 +277,39 @@ void cdg_reader_seek_to_keyframe(struct cdg_reader *reader, struct cdg_keyframe 
 
 // Closest, without going over - like The Price is Right :-)
 struct cdg_keyframe *cdg_reader_find_closest_keyframe(struct cdg_keyframe_list *list, uint32_t ts) {
-    struct cdg_keyframe_list *cur;
-    struct cdg_keyframe_list *prev;
+    // Binary search
+    size_t low = 0;
+    size_t high = list->count - 1;
+    uint32_t bestTs = -1;
+    size_t bestIndex = -1;
 
-    cur = list;
-    prev = NULL;
+    while (low <= high) {
+        size_t mid = (low + high) / 2;
+        struct cdg_keyframe *keyframe = &list->keyframes[mid];
 
-    while (cur) {
-        if (cur->keyframe->timestamp > ts) {
-            break;
+        if (keyframe->timestamp == ts) {
+            return keyframe;
+        } else if (keyframe->timestamp < ts) {
+            if (bestIndex == -1 || keyframe->timestamp > bestTs) {
+                bestTs = keyframe->timestamp;
+                bestIndex = mid;
+            }
+
+            low = mid + 1;
+        } else {
+            high = mid - 1;
         }
-
-        prev = cur;
-        cur = cur->next;
     }
 
-    return prev->keyframe;
+    assert(bestIndex >= 0 && bestIndex < list->count);
+
+    return &list->keyframes[bestIndex];
 }
 
 int cdg_reader_seek_to_timestamp(struct cdg_reader *reader, uint32_t ts) {
     struct cdg_keyframe *keyframe;
 
-    keyframe = cdg_reader_find_closest_keyframe(reader->keyframe_list, ts);
+    keyframe = cdg_reader_find_closest_keyframe(&reader->keyframes, ts);
     cdg_reader_seek_to_keyframe(reader, keyframe);
 
     return cdg_reader_advance_to(reader, ts);

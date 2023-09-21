@@ -20,6 +20,9 @@ int read_file(const char *path, char **buf, unsigned long *size) {
     fseek(fp, 0, SEEK_SET);
 
     *buf = (char *) malloc((*size) + 1);
+
+    CHECK_MEM(*buf)
+
     if (fread(*buf, 1, *size, fp) != *size) {
         free(*buf);
         fclose(fp);

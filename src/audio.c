@@ -13,19 +13,13 @@ struct pcm_buffer *pcm_buffer_new(size_t size) {
 
     pcm = (struct pcm_buffer *) malloc(sizeof(struct pcm_buffer));
 
-    if (pcm == NULL) {
-        fprintf(stderr, "failed to allocate memory\n");
-        exit(1);
-    }
+    CHECK_MEM(pcm)
 
     pcm->size = 0;
     pcm->capacity = size;
     pcm->buffer = (uint16_t *) malloc(size * sizeof(uint16_t));
 
-    if (pcm->buffer == NULL) {
-        fprintf(stderr, "failed to allocate memory\n");
-        exit(1);
-    }
+    CHECK_MEM(pcm->buffer)
 
     return pcm;
 }
@@ -35,10 +29,7 @@ void high_low_buffer_append(struct pcm_buffer *pcm, uint16_t *buf, size_t size) 
         pcm->capacity = pcm->size + size;
         pcm->buffer = (uint16_t *) realloc(pcm->buffer, sizeof(uint16_t) * pcm->capacity);
 
-        if (pcm->buffer == NULL) {
-            fprintf(stderr, "failed to allocate memory\n");
-            exit(1);
-        }
+        CHECK_MEM(pcm->buffer)
     }
 
     memcpy(pcm->buffer + pcm->size, buf, size * sizeof(uint16_t));

@@ -1,9 +1,7 @@
 dashcdg
 =======
 
-It plays CD+G! Requires OpenGL, probably some ancient version like OpenGL 1.1 should be enough.
+It plays MP3+G! Requires OpenGL - the goal is to support OpenGL 3.0 or higher.
 
 ## Usage
-`./your-favorite-audio-player <mp3 file>& ./cdg <cdg file>`
-
-Proper audio playback support coming soon!
+`./cdg <cdg file> <mp3 file>`
