@@ -2,6 +2,7 @@
 #include <string.h>
 #include <GL/glew.h>
 #include <GL/glut.h>
+#include <assert.h>
 
 #include "cdg.h"
 #include "audio.h"
@@ -13,14 +14,8 @@ struct {
 } g_Shader;
 
 static GLuint g_TextureId = 0;
-static uint32_t g_StartTimestamp = 0;
-static struct cdg_reader g_Reader;
-static struct audio_state g_AudioState;
-
-struct mp3_playback_data {
-    char *path;
-    struct audio_state *state;
-} g_PlaybackData;
+static struct cdg_reader *g_Reader;
+static struct audio_state *g_AudioState;
 
 void display(void) {
     uint32_t ms;
@@ -37,17 +32,12 @@ void display(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 
     glUseProgram(g_Shader.id);
+    ms = ATOMIC_INT_GET(g_AudioState->timestamp);
 
-    if (g_StartTimestamp == 0) {
-        g_StartTimestamp = ATOMIC_INT_GET(g_AudioState.timestamp);
-    } else {
-        ms = ATOMIC_INT_GET(g_AudioState.timestamp) - g_StartTimestamp;
-        if (cdg_reader_advance_to(&g_Reader, ms)) {
-            glUniform1i(g_Shader.framebufferLocation, 0);
-            glUniform1iv(g_Shader.colorTableLocation, 16, g_Reader.state.color_table);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 300, 216, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_Reader.state.framebuffer);
-
-        }
+    if (cdg_reader_seek_bidirectional(g_Reader, MS_TO_CDG_FRAME_COUNT(ms))) {
+        glUniform1i(g_Shader.framebufferLocation, 0);
+        glUniform1iv(g_Shader.colorTableLocation, 16, g_Reader->state.color_table);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 300, 216, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_Reader->state.framebuffer);
     }
 
     glBegin(GL_QUADS);
@@ -77,15 +67,45 @@ void resizeCallback(int width, int height) {
     }
 }
 
-static void *mp3_player_thread_callback(void *userData) {
-    struct mp3_playback_data *data = (struct mp3_playback_data *) userData;
+static void seek(uint32_t ms) {
+    audio_state_seek(g_AudioState, ms);
+}
 
-    if (!play_mp3(data->path, data->state)) {
-        fprintf(stderr, "failed to start MP3 playback\n");
-        return NULL;
+void specialKeyboardCallback(int key, int x, int y) {
+    UNUSED(x); UNUSED(y);
+
+    uint32_t currentPos;
+
+    currentPos = audio_state_get_pos(g_AudioState);
+
+    switch (key) {
+        case GLUT_KEY_RIGHT:
+            seek(currentPos + 1000);
+            break;
+        case GLUT_KEY_LEFT:
+            seek(currentPos - 1000);
+            break;
+        default:
+            // Do nothing
+            break;
+    }
+}
+
+// This will be run from the audio playback thread.
+static void *mp3_player_thread_callback(void *userData) {
+    assert(userData != NULL);
+
+    if (!audio_state_load_file(g_AudioState, (char *) userData, NULL)) {
+        fprintf(stderr, "failed to load MP3 file\n");
+        return (void *) 0;
     }
 
-    return NULL;
+    if (!audio_do_playback(g_AudioState)) {
+        fprintf(stderr, "failed to start MP3 playback\n");
+        return (void *) 0;
+    }
+
+    return (void *) 1;
 }
 
 int main(int argc, char *argv[]) {
@@ -95,14 +115,14 @@ int main(int argc, char *argv[]) {
     }
 
     // Set up the CDG reader
-    memset(&g_Reader, 0, sizeof(struct cdg_reader));
+    g_Reader = cdg_reader_new();
 
-    if (!cdg_reader_load_file(&g_Reader, argv[1])) {
+    if (!cdg_reader_load_file(g_Reader, argv[1])) {
         fprintf(stderr, "failed to open file\n");
         return 1;
     }
 
-    cdg_reader_build_keyframe_list(&g_Reader);
+    cdg_reader_build_keyframe_list(g_Reader);
 
     // Set up OpenGL
     glutInit(&argc, argv);
@@ -132,15 +152,17 @@ int main(int argc, char *argv[]) {
 
     glutDisplayFunc(display);
     glutReshapeFunc(resizeCallback);
+    glutSpecialFunc(specialKeyboardCallback);
 
     // Set up the MP3 player
-    g_PlaybackData.path = argv[2];
-    g_PlaybackData.state = &g_AudioState;
-
-    pthread_create(&g_AudioState.thread, NULL, mp3_player_thread_callback, &g_PlaybackData);
+    g_AudioState = audio_state_new();
+    pthread_create(&g_AudioState->thread, NULL, mp3_player_thread_callback, argv[2]);
 
     // Start rendering
     glutMainLoop();
+
+    cdg_reader_free(g_Reader);
+    audio_state_free(g_AudioState);
 
     return 0;
 }

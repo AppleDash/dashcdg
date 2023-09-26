@@ -1,10 +1,14 @@
 CC      := gcc
-CFLAGS  := -Wall -Wextra -Wno-cpp -std=c99 -pedantic -D_FORTIFY_SOURCE=2 -O1 -g -Iinc/
+CFLAGS  := -Wall -Wextra -Wno-cpp -std=c99 -pedantic -D_FORTIFY_SOURCE=2 -Iinc/
 LDFLAGS := -lGL -lGLEW -lglut -lportaudio
-OBJECTS := obj/util.o obj/audio.o obj/render.o obj/cdg.o
+OBJECTS := obj/util.o obj/audio.o obj/player.o obj/cdg.o
 BINARY  := cdg
 
+all: CFLAGS += -O2
 all: $(BINARY)
+
+debug: CFLAGS += -DDEBUG -g
+debug: $(BINARY)
 
 $(BINARY): $(OBJECTS) $(HEADERS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

@@ -16,6 +16,11 @@
 #define CDG_INSN_TILE_BLOCK_XOR      38
 
 #define ARRAY_INDEX(X, Y) (((Y) * 300) + (X))
+// 300 frames per second
+#define MS_TO_CDG_FRAME_COUNT(X) ((int)(((float)(X) * 300.0f) / 1000.0f))
+#define CDG_FRAME_COUNT_TO_MS(X) (((float)(X) * 1000.0f) / 300.0f)
+
+typedef int cdg_ts_t;
 
 #pragma pack(push, 1)
 struct subchannel_packet {
@@ -69,8 +74,8 @@ struct cdg_insn_load_color_table {
 typedef int (*cdg_reader_read_callback)(void *userData, struct subchannel_packet *outPkt);
 
 struct cdg_keyframe {
-    uint32_t timestamp;      // subchannel packet count
-    uint8_t color_table[16];
+    cdg_ts_t timestamp;      // subchannel packet count
+    int color_table[16];
     uint8_t clear_color;
 };
 
@@ -80,7 +85,7 @@ struct cdg_keyframe_list {
 };
 
 struct cdg_state {
-    uint32_t subchannel_packet_count;
+    cdg_ts_t subchannel_packet_count;
     int color_table[16];
     unsigned int framebuffer[300 * 216];
 };
@@ -101,6 +106,12 @@ uint32_t cdg_state_get_time_elapsed(struct cdg_state *state);
 /* Process an instruction and update the state */
 int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pkt);
 
+/* Initialize a CDG reader */
+struct cdg_reader *cdg_reader_new(void);
+
+/* Free a CDG reader */
+void cdg_reader_free(struct cdg_reader *reader);
+
 /* Load a CDG file into a reader */
 int cdg_reader_load_file(struct cdg_reader *reader, const char *path);
 
@@ -111,15 +122,15 @@ int cdg_reader_read_frame(struct cdg_reader *reader, struct subchannel_packet *o
 void cdg_reader_reset(struct cdg_reader *reader);
 
 /* Advance the reader to the given timestamp, processing any commands between the current timestamp and the one we're advancing to. */
-int cdg_reader_advance_to(struct cdg_reader *reader, uint32_t timestamp);
+int cdg_reader_seek_forward(struct cdg_reader *reader, cdg_ts_t timestamp);
 
 /* Build a list of seek snapshots from the CDG reader */
 int cdg_reader_build_keyframe_list(struct cdg_reader *reader);
 
-/* Free a keyframe list */
-void cdg_reader_free_keyframe_list(struct cdg_keyframe_list *list);
+struct cdg_keyframe *cdg_reader_find_closest_keyframe(struct cdg_keyframe_list *list, cdg_ts_t ts);
 
 /* Seek to the given keyframe */
 void cdg_reader_seek_to_keyframe(struct cdg_reader *reader, struct cdg_keyframe *keyframe);
+int cdg_reader_seek_bidirectional(struct cdg_reader *reader, cdg_ts_t ts);
 
 #endif // _CDG_H_INCLUDED
