@@ -20,7 +20,7 @@
 #define MS_TO_CDG_FRAME_COUNT(X) ((int)(((float)(X) * 300.0f) / 1000.0f))
 #define CDG_FRAME_COUNT_TO_MS(X) (((float)(X) * 1000.0f) / 300.0f)
 
-typedef int cdg_ts_t;
+typedef unsigned long cdg_ts_t;
 
 #pragma pack(push, 1)
 struct subchannel_packet {
@@ -85,7 +85,7 @@ struct cdg_keyframe_list {
 };
 
 struct cdg_state {
-    cdg_ts_t subchannel_packet_count;
+    cdg_ts_t ts; /* Current timestamp (in subchannel packets) */
     int color_table[16];
     unsigned int framebuffer[300 * 216];
 };
@@ -99,9 +99,6 @@ struct cdg_reader {
     struct cdg_state state;
     struct cdg_keyframe_list keyframes;
 };
-
-/* Get the time elapsed in milliseconds since the start of the CDG file */
-uint32_t cdg_state_get_time_elapsed(struct cdg_state *state);
 
 /* Process an instruction and update the state */
 int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pkt);
@@ -121,16 +118,9 @@ int cdg_reader_read_frame(struct cdg_reader *reader, struct subchannel_packet *o
 /* Reset the reader to the beginning of the CDG file */
 void cdg_reader_reset(struct cdg_reader *reader);
 
-/* Advance the reader to the given timestamp, processing any commands between the current timestamp and the one we're advancing to. */
-int cdg_reader_seek_forward(struct cdg_reader *reader, cdg_ts_t timestamp);
-
 /* Build a list of seek snapshots from the CDG reader */
-int cdg_reader_build_keyframe_list(struct cdg_reader *reader);
+void cdg_reader_build_keyframe_list(struct cdg_reader *reader);
 
-struct cdg_keyframe *cdg_reader_find_closest_keyframe(struct cdg_keyframe_list *list, cdg_ts_t ts);
-
-/* Seek to the given keyframe */
-void cdg_reader_seek_to_keyframe(struct cdg_reader *reader, struct cdg_keyframe *keyframe);
-int cdg_reader_seek_bidirectional(struct cdg_reader *reader, cdg_ts_t ts);
+int cdg_reader_seek(struct cdg_reader *reader, cdg_ts_t ts);
 
 #endif // _CDG_H_INCLUDED

@@ -21,6 +21,75 @@ static inline int cdg_color_to_rgb(uint16_t color) {
     return (r << 16) | (g << 8) | b;
 }
 
+// Closest, without going over - like The Price is Right :-)
+static struct cdg_keyframe *cdg_reader_find_closest_keyframe(struct cdg_keyframe_list *list, cdg_ts_t ts) {
+    // Binary search
+    size_t low = 0;
+    size_t high = list->count - 1;
+    cdg_ts_t bestTs = -1;
+    size_t bestIndex = (size_t) -1;
+
+    while (low <= high) {
+        size_t mid = (low + high) / 2;
+        struct cdg_keyframe *keyframe = &list->keyframes[mid];
+
+        if (keyframe->timestamp == ts) {
+            return keyframe;
+        } else if (keyframe->timestamp < ts) {
+            if (bestIndex == (size_t) -1 || keyframe->timestamp > bestTs) {
+                bestTs = keyframe->timestamp;
+                bestIndex = mid;
+            }
+
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+
+    assert(bestIndex >= 0 && bestIndex < list->count);
+
+    return &list->keyframes[bestIndex];
+}
+
+static void cdg_reader_seek_to_keyframe(struct cdg_reader *reader, struct cdg_keyframe *keyframe) {
+    reader->state.ts = keyframe->timestamp;
+    reader->buffer_index = reader->state.ts * sizeof(struct subchannel_packet);
+
+    // Load the color table
+    memcpy(reader->state.color_table, keyframe->color_table, sizeof(reader->state.color_table));
+    // Clear the screen
+    memset(reader->state.framebuffer, keyframe->clear_color, (300 * 216) * sizeof(unsigned int));
+}
+
+struct cdg_reader *cdg_reader_new(void) {
+    struct cdg_reader *reader = (struct cdg_reader *) malloc(sizeof(struct cdg_reader));
+
+    CHECK_MEM(reader)
+
+    memset(reader, 0, sizeof(struct cdg_reader));
+
+    return reader;
+}
+
+void cdg_reader_free(struct cdg_reader *reader) {
+    struct cdg_keyframe_list *list = &reader->keyframes;
+
+    if (list->keyframes) {
+        free(list->keyframes);
+    }
+
+    if (reader->buffer) {
+        free(reader->buffer);
+    }
+}
+
+void cdg_reader_reset(struct cdg_reader *reader) {
+    reader->state.ts = 0;
+    reader->buffer_index = 0;
+    reader->eof = 0;
+}
+
 int cdg_reader_read_frame(struct cdg_reader *reader, struct subchannel_packet *outPkt) {
     size_t count = sizeof(struct subchannel_packet);
 
@@ -34,23 +103,12 @@ int cdg_reader_read_frame(struct cdg_reader *reader, struct subchannel_packet *o
     return 1;
 }
 
-void cdg_reader_reset(struct cdg_reader *reader) {
-    reader->buffer_index = 0;
-    reader->eof = 0;
-}
-
-// Returns an integer representing the number of milliseconds elapsed since the start of the CDG stream.
-inline uint32_t cdg_state_get_time_elapsed(struct cdg_state *state) {
-    // 300 packets per second
-    return (state->subchannel_packet_count * 1000) / 300;
-}
-
 // Returns: 1 if we need to update the framebuffer
 int cdg_state_process_insn(struct cdg_state *state, struct subchannel_packet *pkt) {
     uint8_t code;
     struct cdg_insn *insn;
 
-    state->subchannel_packet_count++;
+    state->ts++;
 
     // not a CDG packet
     if ((pkt->command & 0x3F /* 0b111111 */) != 9) {
@@ -191,27 +249,7 @@ int cdg_reader_load_file(struct cdg_reader *reader, const char *path) {
     return 1;
 }
 
-// Returns: 1 if we need to update the framebuffer
-int cdg_reader_seek_forward(struct cdg_reader *reader, cdg_ts_t timestamp) {
-    struct subchannel_packet insn;
-    int needsUpdate = 0;
-
-    while (reader->state.subchannel_packet_count < timestamp) {
-        if (!cdg_reader_read_frame(reader, &insn)) {
-            // End of CDG stream
-            printf("cdg_reader_seek_forward(): end of stream\n");
-            reader->eof = 1;
-            break;
-        }
-
-        // Intentionally using |= here so that cdg_state_process_insn() is always called
-        needsUpdate |= cdg_state_process_insn(&reader->state, &insn);
-    }
-
-    return needsUpdate;
-}
-
-int cdg_reader_build_keyframe_list(struct cdg_reader *reader) {
+void cdg_reader_build_keyframe_list(struct cdg_reader *reader) {
     struct subchannel_packet insn;
     struct cdg_keyframe *keyframe;
 
@@ -264,77 +302,14 @@ int cdg_reader_build_keyframe_list(struct cdg_reader *reader) {
     }
 
     cdg_reader_reset(reader);
-
-    return 1;
 }
 
-struct cdg_reader *cdg_reader_new(void) {
-    struct cdg_reader *reader = (struct cdg_reader *) malloc(sizeof(struct cdg_reader));
-
-    CHECK_MEM(reader)
-
-    memset(reader, 0, sizeof(struct cdg_reader));
-
-    return reader;
-}
-
-void cdg_reader_free(struct cdg_reader *reader) {
-    struct cdg_keyframe_list *list = &reader->keyframes;
-
-    if (list->keyframes) {
-        free(list->keyframes);
-    }
-
-    if (reader->buffer) {
-        free(reader->buffer);
-    }
-}
-
-void cdg_reader_seek_to_keyframe(struct cdg_reader *reader, struct cdg_keyframe *keyframe) {
-    // TODO: Get rid of one of these.
-    reader->state.subchannel_packet_count = keyframe->timestamp;
-    reader->buffer_index = reader->state.subchannel_packet_count * sizeof(struct subchannel_packet);
-
-    memcpy(reader->state.color_table, keyframe->color_table, sizeof(reader->state.color_table));
-    // Clear the screen
-    memset(reader->state.framebuffer, keyframe->clear_color, (300 * 216) * sizeof(unsigned int));
-}
-
-// Closest, without going over - like The Price is Right :-)
-struct cdg_keyframe *cdg_reader_find_closest_keyframe(struct cdg_keyframe_list *list, cdg_ts_t ts) {
-    // Binary search
-    size_t low = 0;
-    size_t high = list->count - 1;
-    cdg_ts_t bestTs = -1;
-    size_t bestIndex = (size_t) -1;
-
-    while (low <= high) {
-        size_t mid = (low + high) / 2;
-        struct cdg_keyframe *keyframe = &list->keyframes[mid];
-
-        if (keyframe->timestamp == ts) {
-            return keyframe;
-        } else if (keyframe->timestamp < ts) {
-            if (bestIndex == (size_t) -1 || keyframe->timestamp > bestTs) {
-                bestTs = keyframe->timestamp;
-                bestIndex = mid;
-            }
-
-            low = mid + 1;
-        } else {
-            high = mid - 1;
-        }
-    }
-
-    assert(bestIndex >= 0 && bestIndex < list->count);
-
-    return &list->keyframes[bestIndex];
-}
-
-int cdg_reader_seek_bidirectional(struct cdg_reader *reader, cdg_ts_t ts) {
+int cdg_reader_seek(struct cdg_reader *reader, cdg_ts_t ts) {
     struct cdg_keyframe *keyframe;
+    struct subchannel_packet pkt;
+    int needsUpdate;
 
-    if (ts > reader->state.subchannel_packet_count) {
+    if (ts > reader->state.ts) {
         // Seeking forward: just go straight to the timestamp we want.
         goto seek_forward;
     }
@@ -346,5 +321,18 @@ int cdg_reader_seek_bidirectional(struct cdg_reader *reader, cdg_ts_t ts) {
 
     // ...and then seek forward to the timestamp we want.
 seek_forward:
-    return cdg_reader_seek_forward(reader, ts);
+    needsUpdate = 0;
+    while (reader->state.ts < ts) {
+        if (!cdg_reader_read_frame(reader, &pkt)) {
+            // End of CDG stream
+            printf("cdg_reader_seek(): end of stream\n");
+            reader->eof = 1;
+            break;
+        }
+
+        // Intentionally using |= here so that cdg_state_process_insn() is always called
+        needsUpdate |= cdg_state_process_insn(&reader->state, &pkt);
+    }
+
+    return needsUpdate;
 }

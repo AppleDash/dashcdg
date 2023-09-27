@@ -34,7 +34,7 @@ void display(void) {
     glUseProgram(g_Shader.id);
     ms = ATOMIC_INT_GET(g_AudioState->timestamp);
 
-    if (cdg_reader_seek_bidirectional(g_Reader, MS_TO_CDG_FRAME_COUNT(ms))) {
+    if (cdg_reader_seek(g_Reader, MS_TO_CDG_FRAME_COUNT(ms))) {
         glUniform1i(g_Shader.framebufferLocation, 0);
         glUniform1iv(g_Shader.colorTableLocation, 16, g_Reader->state.color_table);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 300, 216, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_Reader->state.framebuffer);
