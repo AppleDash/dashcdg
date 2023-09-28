@@ -2,6 +2,7 @@
 #define _CDG_H_INCLUDED
 
 #include <stdint.h>
+#include <stdlib.h>
 
 #define CDG_INSN_INVALID             -2
 #define CDG_INSN_UNKNOWN             -1
@@ -61,6 +62,7 @@ struct cdg_insn_scroll {
     uint8_t _filler[13];
 };
 
+/* The documentation I have doesn't specify the contents of this instruction */
 struct cdg_insn_define_transparent {
     uint8_t _filler[16];
 };
@@ -69,9 +71,6 @@ struct cdg_insn_load_color_table {
     uint16_t spec[8];    // AND with 0x3F3F to clear P and Q channel
 };
 #pragma pack(pop)
-
-// return: 0 -> eof, 1 -> read an instruction, 2 -> read an empty subchannel packet
-typedef int (*cdg_reader_read_callback)(void *userData, struct subchannel_packet *outPkt);
 
 struct cdg_keyframe {
     cdg_ts_t timestamp;      // subchannel packet count

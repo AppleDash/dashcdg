@@ -1,3 +1,4 @@
+// !!! This isn't the actual shader used, you need to change shaders.h to reflect changes to this!
 #version 130
 #extension GL_EXT_gpu_shader4 : enable
 

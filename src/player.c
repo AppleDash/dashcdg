@@ -6,6 +6,7 @@
 
 #include "cdg.h"
 #include "audio.h"
+#include "shaders.h"
 
 struct {
     GLuint id;
@@ -135,7 +136,7 @@ int main(int argc, char *argv[]) {
     glewExperimental = GL_TRUE;
     glewInit();
 
-    if ((g_Shader.id = load_shader_program("cdg")) == 0) {
+    if ((g_Shader.id = load_shader_program(CDG_VERTEX_SHADER_SOURCE, CDG_FRAGMENT_SHADER_SOURCE)) == 0) {
         fprintf(stderr, "failed to load shader program\n");
         return 1;
     }

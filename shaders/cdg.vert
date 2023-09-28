@@ -1,3 +1,4 @@
+// !!! This isn't the actual shader used, you need to change shaders.h to reflect changes to this!
 #version 130
 
 out vec2 vertexCoord;
